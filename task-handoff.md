@@ -85,6 +85,39 @@ Properties:
 - `guests`: integer
 - `amenities`: array[string]
 
+## Section 15 — Recommended HavenTo grammar
+The tool-call language should be:
+
+`[TOOL_CALLS][{"name":"<one valid tool>","arguments":{...}}]`
+
+### Allowed
+- `[TOOL_CALLS]`
+- JSON brackets/braces, quotes, colons and commas where syntactically valid
+- exactly one of the seven valid tool names
+- only the correct argument keys for the selected tool
+- correct JSON value types: string, number, integer, or array[string] as specified
+- exact enum values for `cancelBooking.reason` and `manageFavourites.action`
+- required fields for tools whose schemas require them
+
+### Forbidden
+- unknown tool names
+- unknown argument keys
+- malformed JSON
+- invalid enum values
+- missing `cancelBooking.reason`
+- missing `cancelBooking.reasonDetails`
+- missing `manageFavourites.action`
+- missing `predictDynamicPricing.location`
+- arbitrary natural-language text inside the tool-call object
+- trailing text such as `I found...` while constrained tool-call generation is active
+- multiple tool calls initially
+
+### Backend responsibility
+The CFG must **not** attempt to enumerate real MongoDB values. It should not know which `homeId`, `homeName`, booking ID, location, price, etc. actually exist. The backend remains responsible for database truth, authorization, and business validation.
+
+### Important schema caveat
+The current schemas are permissive for `searchHomes`, `getHomeDetails`, and `createBooking`. In particular, `createBooking` technically allows `{}` because its current JSON schema has no required fields. Do **not** silently invent semantic required fields. Verify the actual HavenTo `TOOLS` definitions and `execute_tool()` implementation before hard-coding stronger requirements into the grammar.
+
 ## Existing HavenTo backend behavior
 The backend currently uses `backend/services/agentService.py`.
 
@@ -179,7 +212,7 @@ Given model logits `z_t(i)`:
 
 Therefore self-attention still determines the model's preferences; grammar masking is an additional constraint applied to the next-token distribution.
 
-CFG guarantees syntactic/structural validity, not factual correctness. Database truth and business rules still come from HavenTo's backend tools.
+CFG guarantees syntactic/structural validity. It does **not** guarantee factual correctness, valid database IDs, or business-rule compliance. Those remain backend responsibilities.
 
 ## What was ruled out / clarified
 - Do not grammar-constrain ordinary final answers.
@@ -207,17 +240,25 @@ CFG guarantees syntactic/structural validity, not factual correctness. Database 
 **Action:** Inspected the existing CFG/logit-masking experiment.
 **Result:** Confirmed it is a bracket/depth state machine, not a complete CFG. It forces `[TOOL_CALLS]`, attempts to stop after JSON closure, but the recorded execution still produced trailing hallucinated text. The next implementation should use a tokenizer-aware grammar state and legal-token mask rather than decoding the whole sequence at every step.
 
+### 2026-09-10 — Section 15 grammar design added
+**Action:** Defined the recommended HavenTo tool-call grammar and its allowed/forbidden behavior.
+**Result:** The constrained language is `[TOOL_CALLS][{"name":"<valid tool>","arguments":{...}}]`, with exactly one tool call initially, a strict seven-tool whitelist, per-tool key/type constraints, enum constraints, required-field constraints, and no trailing natural-language text during constrained generation. MongoDB/business truth remains outside the grammar.
+
+**Action:** Clarified implementation boundary.
+**Result:** The grammar should constrain structural legality and tokenizer continuations; the backend remains responsible for real database values and business validation. `createBooking` remains pending backend verification because its current schema has no required fields.
+
 ## Current blocker
-The immediate blocker is no longer identifying the inference framework: the uploaded notebook establishes that the current implementation is Transformers-based. The blocker is implementing a real tokenizer-aware grammar-constrained decoder compatible with `model.generate()` / `LogitsProcessor`, covering the seven HavenTo tool schemas while restricting the constraint to tool-call generation.
+The immediate blocker is implementing a real tokenizer-aware grammar/state machine compatible with `model.generate()` / `LogitsProcessor`, covering the seven HavenTo tool schemas while restricting the constraint to tool-call generation.
 
 ## Exact next step to resume
 1. Preserve the current Kaggle + Transformers architecture.
-2. Replace the current bracket-only `ToolCallLogitMaskingProcessor` with a real grammar/state-machine implementation that represents the JSON/tool-call language.
-3. At each generation step, derive the set of tokenizer token IDs whose decoded token text can legally continue the current grammar prefix.
-4. Mask every other vocabulary logit to `-inf`.
-5. Stop exactly after the valid tool-call structure closes.
-6. Test against all seven HavenTo tools and invalid-generation cases.
-7. Keep final natural-language generation unrestricted after tool execution.
+2. Inspect the actual HavenTo `TOOLS` and `execute_tool()` implementation to resolve `createBooking` semantics and verify required fields.
+3. Replace the current bracket-only `ToolCallLogitMaskingProcessor` with a real grammar/state-machine implementation representing the Section 15 language.
+4. At each generation step, derive the set of tokenizer token IDs whose decoded token text can legally continue the current grammar prefix.
+5. Mask every other vocabulary logit to `-inf`.
+6. Stop exactly after the valid tool-call structure closes.
+7. Test all seven tools and invalid-generation cases.
+8. Keep final natural-language generation unrestricted after tool execution.
 
 ## Environment quirks / gotchas
 - The user wants exact, step-by-step implementation and does not want unnecessary architecture changes.
