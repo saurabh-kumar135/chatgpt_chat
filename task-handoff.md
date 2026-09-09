@@ -1,23 +1,17 @@
-# Task Handoff — Mistral 7B CFG-Constrained Tool Calling
+# Task Handoff — HavenTo CFG-Constrained Tool Calling
 
-## Overall goal
-Implement Context-Free Grammar (CFG) / grammar-constrained decoding for the HavenTo agent so that **only tool-call generation is grammar constrained**, while normal final natural-language responses remain unrestricted.
+## Goal
+Implement grammar/CFG-constrained decoding for HavenTo so ONLY structured tool-call generation is constrained. Final natural-language responses remain unrestricted.
 
-The target model is **Mistral 7B Instruct v0.3**, running remotely in a Kaggle notebook. HavenTo's FastAPI backend calls the Kaggle endpoint through ngrok.
+Target: Mistral 7B Instruct v0.3 in Kaggle. Current inference stack is Hugging Face Transformers with `model.generate()` and `device_map="auto"`, not vLLM. HavenTo is a FastAPI backend exposed to the model endpoint through ngrok.
 
-## Confirmed architecture
-- HavenTo backend: FastAPI.
-- Mistral 7B Instruct v0.3 inference: Kaggle notebook.
-- **Current notebook actually uses Hugging Face Transformers, not vLLM.**
-- Model is loaded with `AutoModelForCausalLM.from_pretrained(...)` and `device_map="auto"`.
-- Kaggle runtime has 2× Tesla T4 GPUs (~15.6 GB each); the model is split automatically across them.
-- Grammar constraint applies only while generating the structured tool call.
-- Final natural-language response should not be grammar constrained.
-- Earlier handoff recorded vLLM as selected, but inspection of the uploaded notebook supersedes that assumption: the currently working implementation is Transformers-based. vLLM should not be introduced unless deliberately chosen later.
+## HavenTo source verified
+Repository: `saurabh-kumar135/havento-accomodation-booking-platform`
+Important file: `backend/services/agentService.py`.
+The source contains the public `TOOLS` schemas and `execute_tool(tool_name, args, user_id)`. The system prompt also defines when each tool should be selected. fileciteturn9file0
 
-## HavenTo tool set confirmed from the project
-The backend currently exposes 7 valid function tools:
-
+## Public tool contract
+Exactly 7 public tools:
 1. `searchHomes`
 2. `getHomeDetails`
 3. `getUserBookings`
@@ -26,242 +20,168 @@ The backend currently exposes 7 valid function tools:
 6. `manageFavourites`
 7. `predictDynamicPricing`
 
-Important: the CFG is **not** a global whitelist containing only these seven token IDs. At each generation step, the grammar engine must allow every tokenizer token that can legally continue the current grammar state, including JSON punctuation, quotes, colons, commas, argument keys, and valid argument values. Tool names are the semantic alternatives inside the grammar.
+### searchHomes
+Properties: `location:string`, `maxPrice:number`, `minRating:number`. Required: none.
+Backend searches location against location/houseName/description and applies price/rating filters. fileciteturn9file0
 
-## Tool schemas confirmed
-### `searchHomes`
-Properties:
-- `location`: string
-- `maxPrice`: number
-- `minRating`: number
-Required: none.
+### getHomeDetails
+Properties: `homeId:string`, `homeName:string`. Required: none.
+Backend tries ID first, then home name. fileciteturn9file0
 
-### `getHomeDetails`
-Properties:
-- `homeId`: string
-- `homeName`: string
-Required: none.
-
-### `getUserBookings`
+### getUserBookings
 No properties.
+Authentication is checked by backend. fileciteturn10file0
 
-### `createBooking`
-Properties:
-- `homeId`: string
-- `homeName`: string
-- `checkIn`: string
-- `checkOut`: string
-- `guests`: integer
-Required: none.
+### createBooking
+Public properties: `homeId:string`, `homeName:string`, `checkIn:string`, `checkOut:string`, `guests:integer`. Required: none.
 
-### `cancelBooking`
-Properties:
-- `bookingId`: string
-- `homeName`: string
-- `reason`: string enum:
-  - `Change of travel plans`
-  - `Found alternative accommodation`
-  - `Medical or personal emergency`
-  - `Accidental / duplicate booking`
-  - `Host requested cancellation`
-  - `Other solid reason`
-- `reasonDetails`: string
-Required:
-- `reason`
-- `reasonDetails`
+Verified backend behavior:
+- authentication required;
+- home is resolved using `homeId` or `homeName`;
+- backend also internally reads `location`, but `location` is NOT in the public `TOOLS` schema;
+- `guests` defaults to 1;
+- omitted dates produce a flexible-date booking;
+- therefore `{}` is structurally allowed by the current public contract, although a target home must ultimately be resolvable for the operation to succeed. fileciteturn10file0 fileciteturn11file0
 
-### `manageFavourites`
-Properties:
-- `action`: string enum: `list`, `add`, `remove`
-- `homeId`: string
-- `homeName`: string
-Required:
-- `action`
+**CFG rule:** do NOT invent required fields for createBooking and do NOT allow undocumented `location` unless the public tool schema is deliberately changed.
 
-### `predictDynamicPricing`
-Properties:
-- `location`: string (required)
-- `category`: string
-- `guests`: integer
-- `amenities`: array[string]
+### cancelBooking
+Public properties: `bookingId:string`, `homeName:string`, `reason:string enum`, `reasonDetails:string`.
+Required: `reason`, `reasonDetails`.
 
-## Section 15 — Recommended HavenTo grammar
-The tool-call language should be:
+Exact reason enum:
+- `Change of travel plans`
+- `Found alternative accommodation`
+- `Medical or personal emergency`
+- `Accidental / duplicate booking`
+- `Host requested cancellation`
+- `Other solid reason`
 
-`[TOOL_CALLS][{"name":"<one valid tool>","arguments":{...}}]`
+Backend additionally requires `reasonDetails` length >= 15 and enforces the cancellation time window: dated bookings cannot be cancelled within 24 hours of check-in; flexible bookings can only be cancelled within 24 hours of creation. These are backend/business rules, NOT CFG rules. fileciteturn11file0 fileciteturn12file0
 
-### Allowed
-- `[TOOL_CALLS]`
-- JSON brackets/braces, quotes, colons and commas where syntactically valid
-- exactly one of the seven valid tool names
-- only the correct argument keys for the selected tool
-- correct JSON value types: string, number, integer, or array[string] as specified
-- exact enum values for `cancelBooking.reason` and `manageFavourites.action`
-- required fields for tools whose schemas require them
+### manageFavourites
+Properties: `action:string enum`, `homeId:string`, `homeName:string`.
+Required: `action`.
+Exact action enum: `list`, `add`, `remove`.
+`list` does not need a home ID/name; add/remove need a target home at backend level. fileciteturn12file0
 
-### Forbidden
-- unknown tool names
-- unknown argument keys
-- malformed JSON
-- invalid enum values
-- missing `cancelBooking.reason`
-- missing `cancelBooking.reasonDetails`
-- missing `manageFavourites.action`
-- missing `predictDynamicPricing.location`
-- arbitrary natural-language text inside the tool-call object
-- trailing text such as `I found...` while constrained tool-call generation is active
-- multiple tool calls initially
+### predictDynamicPricing
+Properties: `location:string`, `category:string`, `guests:integer`, `amenities:array[string]`.
+Required: `location`.
+Backend defaults category to `Trending`, guests to `2`, and amenities to `[]` if omitted. fileciteturn12file0
 
-### Backend responsibility
-The CFG must **not** attempt to enumerate real MongoDB values. It should not know which `homeId`, `homeName`, booking ID, location, price, etc. actually exist. The backend remains responsible for database truth, authorization, and business validation.
+## Important backend/schema discrepancies
+1. `createBooking.execute_tool()` internally reads `location`, but public `TOOLS` does not declare it. CFG follows the public contract, so `location` is currently forbidden for createBooking. fileciteturn10file0
+2. `cancelBooking.execute_tool()` internally supports `cancelAll`, but public `TOOLS` does not declare it. CFG must currently reject `cancelAll`. If "cancel all" becomes official, first add it to `TOOLS`, then update the grammar. fileciteturn11file0
 
-### Important schema caveat
-The current schemas are permissive for `searchHomes`, `getHomeDetails`, and `createBooking`. In particular, `createBooking` technically allows `{}` because its current JSON schema has no required fields. Do **not** silently invent semantic required fields. Verify the actual HavenTo `TOOLS` definitions and `execute_tool()` implementation before hard-coding stronger requirements into the grammar.
+## Section 15 — grammar requirement
+Canonical structure:
+`[TOOL_CALLS][{"name":"<valid tool>","arguments":{...}}]`
 
-## Existing HavenTo backend behavior
-The backend currently uses `backend/services/agentService.py`.
+Initially exactly ONE tool call is allowed.
 
-`process_chat(...)` currently sends an OpenAI-compatible payload containing:
-- `model`
-- `messages`
-- `tools: TOOLS`
-- `tool_choice: "auto"`
-- `temperature: 0.5`
-- `max_tokens: 800`
+CFG MUST enforce:
+- exact `[TOOL_CALLS]` marker;
+- valid JSON structure;
+- exact 7-tool whitelist;
+- tokenizer-aware tool-name alternatives;
+- only public-schema argument keys for the selected tool;
+- correct JSON types;
+- exact enum values;
+- required public-schema fields;
+- legal quotes, punctuation, commas, brackets and braces;
+- completion immediately after the tool-call structure.
 
-The model can return tool calls. The backend executes them through:
-`execute_tool(tool_name, args, user_id)`.
+CFG MUST reject:
+- unknown tool names;
+- unknown keys;
+- malformed JSON;
+- wrong types;
+- invalid enum values;
+- missing cancel reason/reasonDetails;
+- missing manageFavourites action;
+- missing predictDynamicPricing location;
+- undocumented `cancelAll`;
+- undocumented createBooking `location`;
+- arbitrary natural language inside the tool-call object;
+- trailing text such as `I found...` during constrained generation;
+- multiple tool calls initially.
 
-After tool execution, the tool result is appended and the model is asked for the final natural-language response.
+CFG MUST NOT enforce:
+- real MongoDB IDs/names/locations;
+- whether a home exists;
+- authentication;
+- cancellation 15-character rule;
+- cancellation 24-hour rule;
+- date availability/business rules;
+- price/business constraints.
 
-The current `TOOLS` list and `execute_tool` implementation therefore define the semantics that the new constrained decoder must preserve.
+Those are backend responsibilities.
 
-## Uploaded Kaggle notebook findings — `final_agent.ipynb`
-The uploaded notebook uses:
-- `transformers`
-- `accelerate`
-- `bitsandbytes`
-- `sentencepiece`
-- `AutoTokenizer`
-- `AutoModelForCausalLM`
-- `LogitsProcessor`
-- `LogitsProcessorList`
-- `StoppingCriteria`
-- `StoppingCriteriaList`
+## Tool-selection vs CFG
+The HavenTo system prompt says, among other things:
+- use searchHomes for stay/location/budget/rating searches;
+- use getHomeDetails for specific properties;
+- use createBooking for explicit booking requests;
+- ask for cancellation reason/details before cancellation when they are missing;
+- use getUserBookings for existing bookings;
+- use manageFavourites for saved homes;
+- never invent homes.
 
-Model:
-`mistralai/Mistral-7B-Instruct-v0.3`
+These are primarily **tool-selection and policy rules**, not grammar syntax. The CFG constrains what a selected tool call is allowed to look like; the model/system prompt decides which tool to select. fileciteturn9file0
 
-Loading code uses:
-`AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")`.
+## Correct implementation model
+At each generation step `t`:
+`A_t = tokens that can legally continue the current grammar prefix`.
+Keep logits for tokens in `A_t`; set all other logits to `-inf`; then sample.
 
-The notebook applies the Mistral chat template with `tools=tools` and `add_generation_prompt=True`.
+The seven tool names are NOT the only globally legal token IDs. JSON punctuation, argument keys, strings, numbers, etc. must also be legal when their grammar state permits them.
 
-The current experimental tools in the notebook are only three simplified tools:
-- `search_homes`
-- `get_home_details`
-- `create_booking`
+Tool names and JSON fragments may be split into multiple Mistral tokenizer tokens. The implementation must therefore be tokenizer-aware.
 
-The test prompt is:
-`Find me a stay in Tarapur under 500 and show me its details`
+## Current notebook problem
+The existing `ToolCallLogitMaskingProcessor` is only a bracket/depth state machine. It forces `[TOOL_CALLS]`, decodes generated text every step, tracks nesting, and eventually allows EOS. It does not enforce the full tool whitelist/schema/type/enum/required-field language and previously allowed trailing hallucinated natural-language/property content.
 
-## Current experimental constrained decoder
-`ToolCallLogitMaskingProcessor` currently:
-1. Forces `[TOOL_CALLS]` at the first generated step when `force_tool=True`.
-2. Decodes generated token IDs into text at each generation step.
-3. Searches for `[TOOL_CALLS]`, then tracks `[`/`]` and `{`/`}` nesting while attempting to ignore brackets inside strings.
-4. When nesting depth reaches zero, masks all vocabulary logits to `-inf` except EOS.
+## Exact next implementation
+1. Keep Kaggle + Transformers + `model.generate()`.
+2. Build grammar from the VERIFIED public `TOOLS` contract above.
+3. Implement states for marker, JSON structure, tool-name prefixes, per-tool keys, values, enums, arrays, required-field tracking, and closure.
+4. Map legal grammar continuations to tokenizer token IDs.
+5. Replace the bracket-only logits processor.
+6. Stop after exactly one complete valid tool call.
+7. Parse the call and send it through the existing HavenTo `execute_tool()` path.
+8. Keep final natural-language generation unrestricted.
+9. Test all 7 tools plus invalid tool/key/type/enum/required-field cases.
 
-`ToolCallStoppingCriteria` similarly decodes the generated sequence at every step and stops when the outer JSON structure closes.
-
-The notebook's generation call uses:
-- `max_new_tokens=200`
-- `do_sample=True`
-- `temperature=0.2`
-- `top_p=0.9`
-- the custom logits processor
-- the custom stopping criterion
-
-The observed output still contained the structured tool call followed by hallucinated natural-language chatter, including a fabricated home ID, location, price, rating, amenities, and host information. This shows the current implementation does **not yet provide reliable grammar-constrained tool-call-only generation**.
-
-## Important technical assessment of current notebook
-The current processor is **not a full CFG implementation**. It is a bracket/depth state machine plus a first-token force and an EOS condition.
-
-It does not yet enforce:
-- the exact set of valid tool names;
-- tokenizer-aware prefixes for multi-token tool names;
-- exact JSON key ordering/structure as desired;
-- per-tool argument schemas;
-- string/number/integer/array lexical constraints;
-- enum constraints for `cancelBooking.reason` and `manageFavourites.action`;
-- required-field constraints;
-- valid JSON separators and token-level continuation states throughout the complete call.
-
-Also, decoding the complete generated sequence to text on every step is inefficient and is not the desired tokenizer-aware mechanism.
-
-## Conceptual CFG/logit masking model
-At generation step `t`, define:
-
-`A_t = {tokens that can legally continue the current grammar prefix}`
-
-Given model logits `z_t(i)`:
-
-- if token `i` is legal: keep `z_t(i)` unchanged
-- if token `i` is illegal: set `z_t(i) = -infinity`
-- then apply softmax/sampling to the masked logits
-
-Therefore self-attention still determines the model's preferences; grammar masking is an additional constraint applied to the next-token distribution.
-
-CFG guarantees syntactic/structural validity. It does **not** guarantee factual correctness, valid database IDs, or business-rule compliance. Those remain backend responsibilities.
-
-## What was ruled out / clarified
-- Do not grammar-constrain ordinary final answers.
-- Do not treat the seven tool names as the only globally legal tokens.
-- Do not assume a simple seven-token-ID mask is sufficient; Mistral's tokenizer may split tool names and JSON strings into multiple subword tokens.
-- Do not unnecessarily redesign HavenTo's backend architecture.
-- Do not assume vLLM is already running: the uploaded notebook proves the current implementation is direct Transformers `model.generate()`.
+## Testing priorities
+- searchHomes: location, price, rating, combinations
+- getHomeDetails: ID/name
+- getUserBookings
+- createBooking: full args and flexible/no-date booking
+- cancelBooking: all six valid reasons; short reasonDetails should be rejected by backend, not CFG
+- manageFavourites: list/add/remove
+- predictDynamicPricing: location only and all optional fields
+- unknown tool/key
+- wrong JSON type
+- invalid enum
+- missing required fields
+- undocumented `cancelAll`
+- undocumented createBooking `location`
+- trailing natural language
 
 ## Live log
+### 2026-09-10 — Notebook inspection
+Confirmed current notebook uses Transformers, not vLLM, and existing constraint logic is bracket-based rather than a real grammar.
 
-### 2026-09-10 — Initial handoff
-**Action:** Established the target architecture and scope for CFG-constrained Mistral tool calling.
-**Result:** Confirmed Mistral 7B Instruct v0.3 runs in Kaggle, HavenTo FastAPI calls it through ngrok, and only tool-call generation should be grammar constrained.
+### 2026-09-10 — Section 15 design
+Defined `[TOOL_CALLS][{"name":"<valid tool>","arguments":{...}}]`, strict 7-tool whitelist, per-tool schemas, enums, required fields, exactly one initial call, and no trailing natural language during constrained generation.
 
-**Action:** Confirmed inference framework during planning.
-**Result:** User selected **B — vLLM**, but this was later contradicted by inspection of the actual notebook; current notebook uses Transformers.
+### 2026-09-10 — HavenTo repository verification
+Inspected `backend/services/agentService.py` and verified actual `TOOLS` plus `execute_tool()` behavior. Key corrections:
+- `createBooking` is genuinely permissive in the public schema and supports flexible dates/default guests; do not invent required fields. fileciteturn10file0 fileciteturn11file0
+- backend internally reads undocumented createBooking `location`; CFG should reject it under the current public contract. fileciteturn10file0
+- backend internally supports undocumented `cancelAll`; CFG should reject it under the current public contract. fileciteturn11file0
+- cancellation's 15-character and 24-hour constraints belong to backend validation, not CFG. fileciteturn11file0 fileciteturn12file0
 
-**Action:** Recorded the actual HavenTo tool set and schemas.
-**Result:** Seven tools and their argument constraints are captured above for use when constructing the grammar.
-
-### 2026-09-10 — Uploaded notebook inspected
-**Action:** Inspected `final_agent.ipynb` supplied by the user.
-**Result:** Confirmed the actual runtime uses Hugging Face Transformers with `AutoModelForCausalLM.from_pretrained`, `device_map="auto"`, and `model.generate()` rather than vLLM. Two Tesla T4 GPUs are available and the model is automatically split across them.
-
-**Action:** Inspected the existing CFG/logit-masking experiment.
-**Result:** Confirmed it is a bracket/depth state machine, not a complete CFG. It forces `[TOOL_CALLS]`, attempts to stop after JSON closure, but the recorded execution still produced trailing hallucinated text. The next implementation should use a tokenizer-aware grammar state and legal-token mask rather than decoding the whole sequence at every step.
-
-### 2026-09-10 — Section 15 grammar design added
-**Action:** Defined the recommended HavenTo tool-call grammar and its allowed/forbidden behavior.
-**Result:** The constrained language is `[TOOL_CALLS][{"name":"<valid tool>","arguments":{...}}]`, with exactly one tool call initially, a strict seven-tool whitelist, per-tool key/type constraints, enum constraints, required-field constraints, and no trailing natural-language text during constrained generation. MongoDB/business truth remains outside the grammar.
-
-**Action:** Clarified implementation boundary.
-**Result:** The grammar should constrain structural legality and tokenizer continuations; the backend remains responsible for real database values and business validation. `createBooking` remains pending backend verification because its current schema has no required fields.
-
-## Current blocker
-The immediate blocker is implementing a real tokenizer-aware grammar/state machine compatible with `model.generate()` / `LogitsProcessor`, covering the seven HavenTo tool schemas while restricting the constraint to tool-call generation.
-
-## Exact next step to resume
-1. Preserve the current Kaggle + Transformers architecture.
-2. Inspect the actual HavenTo `TOOLS` and `execute_tool()` implementation to resolve `createBooking` semantics and verify required fields.
-3. Replace the current bracket-only `ToolCallLogitMaskingProcessor` with a real grammar/state-machine implementation representing the Section 15 language.
-4. At each generation step, derive the set of tokenizer token IDs whose decoded token text can legally continue the current grammar prefix.
-5. Mask every other vocabulary logit to `-inf`.
-6. Stop exactly after the valid tool-call structure closes.
-7. Test all seven tools and invalid-generation cases.
-8. Keep final natural-language generation unrestricted after tool execution.
-
-## Environment quirks / gotchas
-- The user wants exact, step-by-step implementation and does not want unnecessary architecture changes.
-- The grammar must be tokenizer-aware because tool names and JSON strings may span multiple Mistral tokens.
-- Keep the distinction clear between **model preference** (logits/attention) and **grammar legality** (logit masking).
-- The user explicitly requested that task handoff information be maintained in the GitHub repository `saurabh-kumar135/chatgpt_chat`.
+## Clarification workflow
+If an implementation decision genuinely cannot be determined from the code/current requirements, ask the user **one question at a time in MCP format**, wait for the answer, then continue. Do not ask multiple clarification questions simultaneously.
