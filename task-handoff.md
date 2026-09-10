@@ -1,85 +1,32 @@
 # Task Handoff — HavenTo CFG-Constrained Tool Calling
 
 ## Goal
-Implement grammar/CFG-constrained decoding for HavenTo so the LLM generates **only a valid structured tool-call object**. The generated object is then sent to the HavenTo backend, which validates/parses it, executes the selected tool against MongoDB/ML services, and returns the tool result. Final natural-language response generation remains unrestricted.
+Implement grammar/CFG-constrained decoding for HavenTo so the LLM generates only one valid structured tool-call JSON object. The generated object is parsed by a backend adapter and routed into the existing HavenTo `execute_tool(tool_name, args, user_id)` path. Final natural-language response generation remains unrestricted.
 
-Target model: Mistral 7B Instruct v0.3 in Kaggle. Current notebook inference stack is Hugging Face Transformers with `model.generate()` and `device_map="auto"`, not vLLM.
+Target model: `mistralai/Mistral-7B-Instruct-v0.3` in Kaggle. Current notebook inference stack is Hugging Face Transformers with `model.generate()` and `device_map="auto"`, not vLLM.
 
-## Critical architecture correction — NO `[TOOL_CALLS]` marker
+## Confirmed architecture — NO `[TOOL_CALLS]` marker
 
-The previous handoff incorrectly defined the constrained output as:
-`[TOOL_CALLS][{"name":"<valid tool>","arguments":{...}}]`
-
-**This is removed. Do NOT build the HavenTo CFG around `[TOOL_CALLS]`.**
-
-After re-checking the HavenTo backend, the actual application architecture is:
-
-```text
-User message
-    ↓
-LLM
-    ↓
-structured tool-call object
-    ↓
-HavenTo backend
-    ↓
-parse / validate tool name + arguments
-    ↓
-execute_tool(tool_name, args, user_id)
-    ↓
-MongoDB / pricing service
-    ↓
-tool result
-    ↓
-LLM or backend response generation
-    ↓
-user
-```
-
-The existing production backend uses the OpenAI-compatible Groq tool-calling protocol: it sends `TOOLS` to the model, reads `assistant_msg.get("tool_calls")`, extracts `tc["function"]["name"]` and parses `tc["function"]["arguments"]` with `json.loads`, then calls `execute_tool(fn_name, fn_args, user_id)`. The backend then sends the tool result back to the model as a `role: "tool"` message for the follow-up response. fileciteturn18file0 fileciteturn19file0
-
-For the **new Kaggle CFG experiment**, the clean design is therefore to make the constrained LLM output a plain structured JSON tool-call object, for example:
+The constrained output is exactly one plain JSON object:
 
 ```json
 {"name":"searchHomes","arguments":{"location":"Bijnor"}}
 ```
 
-There should be no `[TOOL_CALLS]` prefix and no natural-language wrapper around this object.
+Do NOT use:
+- `[TOOL_CALLS]` prefix
+- enclosing array
+- provider-native `tool_calls` response structure
+- natural-language wrapper around the object
+- multiple tool-call objects in one generation
 
-If the Kaggle endpoint is used as a replacement for the model currently inside `process_chat`, the backend adapter should parse this JSON object and invoke the existing `execute_tool(tool_name, args, user_id)` path. The exact HTTP adapter/endpoint can be implemented later; the grammar itself should represent the structured object, not an invented text marker.
+Current production Groq path uses provider-native `assistant_msg["tool_calls"]`; the new Kaggle CFG path intentionally replaces that model-side protocol with plain JSON plus a backend adapter.
 
-## HavenTo source verified
+## Verified HavenTo backend
 Repository: `saurabh-kumar135/havento-accomodation-booking-platform`
 Important file: `backend/services/agentService.py`.
-The source contains the public `TOOLS` schemas and `execute_tool(tool_name, args, user_id)`. The system prompt also defines when each tool should be selected. fileciteturn14file0
 
-## Actual backend execution path
-The current `process_chat()` sends the public `TOOLS` definitions to the Groq model. When the model returns tool calls, the backend:
-
-1. Reads `assistant_msg.get("tool_calls")`.
-2. For each tool call, reads the function name.
-3. Parses the function arguments with `json.loads`.
-4. Calls `execute_tool(fn_name, fn_args, user_id)`.
-5. Logs the tool invocation/result.
-6. Performs a follow-up model call with the tool result as a `role: "tool"` message.
-7. Uses the follow-up assistant content as the natural-language response. If needed, it synthesizes a response directly from the tool result. fileciteturn18file0 fileciteturn19file0
-
-The CFG experiment should preserve this **semantic pipeline**, while replacing the model-side tool-call generation with our own constrained JSON generation and an adapter that feeds the parsed object into `execute_tool()`.
-
-Important distinction:
-
-```text
-Current Groq path:
-LLM → provider-native tool_calls structure → backend → execute_tool()
-
-New Kaggle CFG path:
-Mistral → CFG-constrained JSON object → backend adapter → execute_tool()
-```
-
-The `[TOOL_CALLS]` string marker is not required by the HavenTo backend and should not be treated as part of the target grammar.
-
-## Public tool contract
-Exactly 7 public tools:
+The public `TOOLS` list contains exactly 7 tools:
 1. `searchHomes`
 2. `getHomeDetails`
 3. `getUserBookings`
@@ -88,34 +35,69 @@ Exactly 7 public tools:
 6. `manageFavourites`
 7. `predictDynamicPricing`
 
-### searchHomes
-Properties: `location:string`, `maxPrice:number`, `minRating:number`. Required: none.
-Backend searches location against location/houseName/description and applies price/rating filters. fileciteturn14file0
+`process_chat()` currently sends `TOOLS` to Groq, reads `assistant_msg.get("tool_calls")`, parses function arguments with `json.loads`, calls `execute_tool(fn_name, fn_args, user_id)`, then sends tool results back for a follow-up natural-language response. fileciteturn21file0
 
-### getHomeDetails
-Properties: `homeId:string`, `homeName:string`. Required: none.
-Backend tries ID first, then home name. fileciteturn14file0
+## Public tool contract — verified
 
-### getUserBookings
-No properties.
-Authentication is checked by backend. fileciteturn15file0
+### `searchHomes`
+Properties:
+- `location`: string
+- `maxPrice`: number
+- `minRating`: number
 
-### createBooking
-Public properties: `homeId:string`, `homeName:string`, `checkIn:string`, `checkOut:string`, `guests:integer`. Required: none.
+Required: none.
 
-Verified backend behavior:
+Backend searches `location`, `houseName`, and `description`, then applies price/rating filters. fileciteturn21file0
+
+### `getHomeDetails`
+Properties:
+- `homeId`: string
+- `homeName`: string
+
+Required in the public schema: none.
+
+Backend tries `homeId` first, then `homeName`. fileciteturn23file0
+
+**Grammar decision:** keep the public schema exactly as currently declared. Do not invent a new formal required field unless the backend/API contract is deliberately changed.
+
+### `getUserBookings`
+No arguments:
+
+```json
+{"name":"getUserBookings","arguments":{}}
+```
+
+Authentication remains backend-controlled. fileciteturn23file0
+
+### `createBooking`
+Public properties:
+- `homeId`: string
+- `homeName`: string
+- `checkIn`: string
+- `checkOut`: string
+- `guests`: integer
+
+Required in the current public schema: none.
+
+Backend behavior:
 - authentication required;
-- home is resolved using `homeId` or `homeName`;
-- backend also internally reads `location`, but `location` is NOT in the public `TOOLS` schema;
+- resolves the property using `homeId` or `homeName`;
+- internally also reads `location`, but `location` is NOT in the public `TOOLS` schema;
 - `guests` defaults to 1;
-- omitted dates produce a flexible-date booking;
-- therefore `{}` is structurally allowed by the current public contract, although a target home must ultimately be resolvable for the operation to succeed. fileciteturn15file0
+- omitted dates create a flexible-date booking. fileciteturn23file0turn24file0
 
-**CFG rule:** do NOT invent required fields for createBooking and do NOT allow undocumented `location` unless the public tool schema is deliberately changed.
+**CFG decision:** do NOT allow undocumented `location`. Do not make `homeId`/`homeName` formally required unless we deliberately change the public API contract. Backend still determines whether the operation can actually succeed.
 
-### cancelBooking
-Public properties: `bookingId:string`, `homeName:string`, `reason:string enum`, `reasonDetails:string`.
-Required: `reason`, `reasonDetails`.
+### `cancelBooking`
+Public properties:
+- `bookingId`: string
+- `homeName`: string
+- `reason`: string enum
+- `reasonDetails`: string
+
+Required:
+- `reason`
+- `reasonDetails`
 
 Exact reason enum:
 - `Change of travel plans`
@@ -125,75 +107,73 @@ Exact reason enum:
 - `Host requested cancellation`
 - `Other solid reason`
 
-Backend additionally requires `reasonDetails` length >= 15 and enforces the cancellation time window: dated bookings cannot be cancelled within 24 hours of check-in; flexible bookings can only be cancelled within 24 hours of creation. These are backend/business rules, NOT CFG rules. fileciteturn15file0 fileciteturn18file0
+Backend additionally enforces `reasonDetails` length >= 15 and the 24-hour cancellation policy. These are backend/business rules, not CFG rules. fileciteturn23file0turn24file0
 
-### manageFavourites
-Properties: `action:string enum`, `homeId:string`, `homeName:string`.
-Required: `action`.
-Exact action enum: `list`, `add`, `remove`.
-`list` does not need a home ID/name; add/remove need a target home at backend level. fileciteturn18file0
+Important backend-only behavior: `execute_tool()` also supports an internal `cancelAll` argument and can permanently delete an already-cancelled booking. Neither is in the public `TOOLS` schema.
 
-### predictDynamicPricing
-Properties: `location:string`, `category:string`, `guests:integer`, `amenities:array[string]`.
-Required: `location`.
-Backend defaults category to `Trending`, guests to `2`, and amenities to `[]` if omitted. fileciteturn18file0
+**CFG decision:** reject undocumented `cancelAll` and do not expose permanent deletion as a grammar operation unless the public tool contract is deliberately expanded first.
 
-## Important backend/schema discrepancies
-1. `createBooking.execute_tool()` internally reads `location`, but public `TOOLS` does not declare it. CFG follows the public contract, so `location` is currently forbidden for createBooking. fileciteturn15file0
-2. `cancelBooking.execute_tool()` internally supports `cancelAll`, but public `TOOLS` does not declare it. CFG must currently reject `cancelAll`. If "cancel all" becomes official, first add it to `TOOLS`, then update the grammar. fileciteturn15file0
+### `manageFavourites`
+Properties:
+- `action`: string enum `list | add | remove`
+- `homeId`: string
+- `homeName`: string
 
-## Correct target grammar
-The constrained output is exactly one JSON object:
+Public required field: `action`.
 
-```text
-TOOL_CALL → '{' NAME_FIELD ',' ARGUMENTS_FIELD '}'
-```
+Backend behavior:
+- `list` can work without a target home;
+- `add`/`remove` need a target home to resolve successfully. fileciteturn23file0turn25file0
+
+**CFG decision:** preserve the public schema. Conditional target requirements may be represented in the grammar if desired, but they are ultimately backend execution requirements unless the public schema is changed to encode them formally.
+
+### `predictDynamicPricing`
+Properties:
+- `location`: string — required
+- `category`: string — optional, backend default `Trending`
+- `guests`: integer — optional, backend default `2`
+- `amenities`: array of strings — optional, backend default `[]`
+
+This maps directly to the CFG. fileciteturn25file0
+
+## Confirmed CFG target
 
 Conceptually:
 
 ```text
-{"name":"<valid tool>","arguments":{...}}
+TOOL_CALL → '{' NAME_FIELD ',' ARGUMENTS_FIELD '}'
+NAME_FIELD → '"name":"' TOOL_NAME '"'
+ARGUMENTS_FIELD → '"arguments":' ARG_OBJECT
 ```
 
-There is **no** `[TOOL_CALLS]` prefix.
-There is **no** enclosing JSON array unless the backend contract is deliberately changed later.
-There is **no** natural-language text before or after the object during constrained generation.
+`TOOL_NAME` is exactly one of the seven public tool names.
 
-The initial implementation should allow exactly ONE tool call.
+The grammar must be tokenizer-aware because Mistral tokenizer tokens may split tool names, JSON fragments, keys, strings, or punctuation across multiple tokens.
 
 ## CFG MUST enforce
-- exact JSON object structure;
-- exact required top-level fields: `name` and `arguments`;
-- exact 7-tool whitelist;
+
+- one top-level JSON object;
+- exact top-level fields `name` and `arguments`;
+- exact seven-tool whitelist;
 - tokenizer-aware tool-name alternatives;
-- only public-schema argument keys for the selected tool;
+- only public argument keys for the selected tool;
+- valid JSON syntax;
 - correct JSON value types;
 - exact enum values;
-- required public-schema fields;
-- legal quotes, punctuation, commas, brackets and braces;
-- valid JSON string/number/array syntax;
-- completion immediately after the complete tool-call object.
-
-Example valid outputs:
-
-```json
-{"name":"getUserBookings","arguments":{}}
-```
-
-```json
-{"name":"searchHomes","arguments":{"location":"Bijnor","maxPrice":2000}}
-```
-
-```json
-{"name":"cancelBooking","arguments":{"reason":"Other solid reason","reasonDetails":"My travel plans have changed."}}
-```
+- public-schema required fields;
+- legal strings, numbers, arrays, commas, braces and brackets;
+- immediate completion after the complete object;
+- no trailing natural language;
+- no second tool-call object.
 
 ## CFG MUST reject
-- `[TOOL_CALLS]...` because it is not part of the new target contract;
-- unknown tool names;
+
+- `[TOOL_CALLS]` prefix;
+- arrays around the tool call;
+- unknown tools;
 - unknown argument keys;
 - malformed JSON;
-- wrong JSON types;
+- wrong types;
 - invalid enum values;
 - missing `cancelBooking.reason`;
 - missing `cancelBooking.reasonDetails`;
@@ -201,162 +181,148 @@ Example valid outputs:
 - missing `predictDynamicPricing.location`;
 - undocumented `cancelAll`;
 - undocumented `createBooking.location`;
-- arbitrary natural language inside the JSON object;
-- trailing natural-language text after the JSON object;
-- multiple tool-call objects initially.
+- arbitrary natural language inside the structured object;
+- trailing natural-language text;
+- multiple tool-call objects.
+
+## Important correction about conditional fields
+
+Earlier discussion suggested making `homeId OR homeName` formally required for `getHomeDetails` and `createBooking`, and making a target required for `manageFavourites.add/remove`.
+
+After the latest backend verification, the implementation decision is:
+
+**Do not silently change the public `TOOLS` schema.**
+
+The current public schemas explicitly declare `required: []` for `getHomeDetails` and `createBooking`, and only `action` for `manageFavourites`. Therefore the initial CFG should represent the verified public contract rather than inventing stricter required fields.
+
+Backend execution can still reject an operation when no resolvable target exists.
+
+If we later decide that these conditional requirements should be part of the formal public contract, first update the API/tool schema and then regenerate the CFG from that new contract.
 
 ## CFG MUST NOT enforce
-- real MongoDB IDs/names/locations;
-- whether a home exists;
+
+- real MongoDB IDs;
+- real home names/locations;
 - authentication;
-- cancellation 15-character rule;
+- database existence/state;
+- booking existence;
+- date availability;
+- cancellation 15-character semantic rule;
 - cancellation 24-hour rule;
-- date availability/business rules;
-- price/business constraints;
-- whether a booking target resolves successfully;
-- MongoDB state;
-- ML pricing output correctness.
+- actual business validity;
+- ML prediction correctness;
+- user ownership beyond backend checks.
 
-Those remain backend/tool execution responsibilities.
+These remain backend/application responsibilities.
 
-## Tool-selection vs CFG
-The HavenTo system prompt defines when a tool should be selected:
-- use searchHomes for stay/location/budget/rating searches;
-- use getHomeDetails for specific properties;
-- use createBooking for explicit booking requests;
-- ask for cancellation reason/details before cancellation when missing;
-- use getUserBookings for existing bookings;
-- use manageFavourites for saved homes;
-- never invent homes.
+## Backend validation recommendation
 
-These are primarily **tool-selection and policy rules**, not grammar syntax. The CFG validates the structure of the selected tool call. The model/prompt or an upstream decision mechanism determines which tool is selected. fileciteturn14file0
-
-## Correct implementation model
-At each generation step `t`:
-
-`A_t = tokens that can legally continue the current grammar prefix`.
-
-Keep logits for tokens in `A_t`; set all other logits to `-inf`; then sample.
-
-The seven tool names are NOT the only globally legal token IDs. JSON punctuation, argument keys, strings, numbers, arrays, etc. must also be legal when their grammar state permits them.
-
-Tool names and JSON fragments may be split into multiple Mistral tokenizer tokens. The implementation must therefore be tokenizer-aware.
-
-Example:
+The new Kaggle adapter should add a validation layer before calling `execute_tool()`:
 
 ```text
-Current prefix:
-{"name":"sea
-
-Legal continuation:
-searchHomes
-
-Illegal completions:
-cancelBooking
-getHomeDetails
+Mistral
+  ↓
+CFG-constrained JSON
+  ↓
+JSON parse
+  ↓
+public-schema validation
+  ↓
+tool whitelist validation
+  ↓
+execute_tool(tool_name, args, user_id)
 ```
 
-The grammar should operate on tokenizer continuations rather than assuming one token equals one word/field/value.
+This is defense in depth. CFG protects the generation path; backend validation protects the application if the adapter is called with malformed or manually crafted input.
 
-## Backend validation vs CFG validation
-There are two separate validation layers:
+## Backend issues identified for later hardening
 
-### Layer 1 — CFG
-Checks whether the generated object belongs to the allowed formal language.
+These are NOT reasons to complicate the CFG:
 
-Example:
+1. `createBooking` internally reads undocumented `location`.
+2. `cancelBooking` internally supports undocumented `cancelAll` and permanent deletion of already-cancelled bookings.
+3. `guests` is cast to integer but has no explicit `>= 1` validation.
+4. Date parsing falls back to raw strings if parsing fails; invalid date ordering can therefore reach booking creation.
+5. `maxPrice`/`minRating` use truthiness checks, so zero is treated as absent.
+6. Search values are inserted directly into MongoDB regex queries and should be escaped if regex syntax is not intentionally supported.
 
-```json
-{"name":"searchHomes","arguments":{"maxPrice":2000}}
-```
+These should be handled separately from CFG work.
 
-CFG answer: **valid structure**.
+## Tool-selection vs grammar
 
-### Layer 2 — backend
-Checks whether the requested operation can actually be executed.
+The HavenTo system prompt determines when a tool should be selected. CFG determines whether the selected output has legal structure.
 
-For example:
-- does the home ID exist?
-- is the user logged in?
-- does the booking exist?
-- is cancellation allowed right now?
-- is the property target resolvable?
-- what records are in MongoDB?
+Examples:
+- user asks for homes in Bijnor → model selects `searchHomes`;
+- user asks to see bookings → `getUserBookings`;
+- user explicitly books a home → `createBooking`;
+- user asks about a specific property → `getHomeDetails`;
+- user manages saved homes → `manageFavourites`;
+- user asks for dynamic pricing → `predictDynamicPricing`.
 
-Therefore:
-
-```text
-CFG valid
-   ↓
-backend execute_tool()
-   ↓
-actual application state / business rules
-```
-
-CFG is not a replacement for backend validation.
+The CFG does not need to understand the user's natural-language intent or MongoDB state.
 
 ## Current notebook problem
-The existing `ToolCallLogitMaskingProcessor` is only a bracket/depth state machine. It previously forced `[TOOL_CALLS]`, decoded generated text every step, tracked nesting, and eventually allowed EOS. It does not enforce the full tool whitelist/schema/type/enum/required-field language and previously allowed trailing hallucinated natural-language/property content.
 
-Because the target contract is now a plain JSON object, the old `[TOOL_CALLS]` forcing logic must be removed rather than repaired.
+The existing `ToolCallLogitMaskingProcessor` is only a bracket/depth state machine. It previously forced `[TOOL_CALLS]`, decoded generated text each step, tracked nesting, and eventually allowed EOS. It is not a complete CFG for the seven-tool JSON contract.
+
+Do not patch the old `[TOOL_CALLS]` logic. Replace it with tokenizer-aware constrained decoding for the plain JSON object.
 
 ## Exact next implementation
+
 1. Keep Kaggle + Transformers + `model.generate()`.
-2. Remove all assumptions that `[TOOL_CALLS]` is required.
-3. Build the grammar from the VERIFIED public `TOOLS` contract above.
-4. Start grammar at `{`, not `[TOOL_CALLS]`.
-5. Implement top-level fields `name` and `arguments`.
-6. Implement tokenizer-aware tool-name prefixes for the seven tools.
-7. After the tool name is known, switch to the corresponding per-tool argument grammar.
-8. Enforce allowed keys, JSON types, enums, and required fields.
-9. Map legal grammar continuations to tokenizer token IDs.
-10. Stop after exactly one complete valid JSON tool-call object.
-11. Parse the resulting JSON object.
-12. Send `tool_name` and `arguments` through the HavenTo backend adapter into the existing `execute_tool(tool_name, args, user_id)` path.
-13. Keep final natural-language generation unrestricted.
-14. Test all 7 tools plus invalid tool/key/type/enum/required-field cases.
+2. Remove all `[TOOL_CALLS]` assumptions.
+3. Define the grammar from the verified public `TOOLS` contract above.
+4. Start generation at `{`.
+5. Generate exactly one object with `name` and `arguments`.
+6. Use tokenizer-aware continuation states for the seven tool names.
+7. Switch to the selected tool's argument grammar after the tool name is complete.
+8. Enforce public keys, JSON types, enums, and public required fields.
+9. Prevent all trailing text after `}`.
+10. Parse the generated JSON.
+11. Validate it again in the backend adapter.
+12. Call `execute_tool(tool_name, args, user_id)`.
+13. Return tool results to an unrestricted response-generation step.
+14. Test all seven tools and all invalid cases.
 
 ## Testing priorities
+
 ### Valid
-- `searchHomes`: location, price, rating, combinations, `{}`
-- `getHomeDetails`: ID/name and `{}` as structurally valid
+- `searchHomes`: `{}`, location, maxPrice, minRating, combinations
+- `getHomeDetails`: `{}`, homeId, homeName
 - `getUserBookings`: `{}`
-- `createBooking`: full args and flexible/no-date booking
-- `cancelBooking`: all six valid reasons with reasonDetails
+- `createBooking`: `{}`, full arguments, flexible/no-date booking
+- `cancelBooking`: all six reason enums plus reasonDetails
 - `manageFavourites`: list/add/remove
 - `predictDynamicPricing`: location only and all optional fields
 
 ### Invalid
 - `[TOOL_CALLS]` prefix
+- array wrapper
 - unknown tool
 - unknown argument key
-- wrong JSON type
+- wrong type
 - invalid enum
-- missing required field
+- missing public required field
 - undocumented `cancelAll`
-- undocumented createBooking `location`
+- undocumented `createBooking.location`
 - malformed JSON
 - trailing natural language
 - multiple objects/tool calls
 
 ## Live log
+
 ### 2026-09-10 — Notebook inspection
 Confirmed current notebook uses Transformers, not vLLM, and existing constraint logic is bracket-based rather than a real grammar.
 
-### 2026-09-10 — Section 15 design
-Originally defined `[TOOL_CALLS][{"name":"<valid tool>","arguments":{...}}]`; this was later identified as incorrect for the intended Kaggle → HavenTo backend architecture.
+### 2026-09-10 — HavenTo architecture verification
+Re-inspected `backend/services/agentService.py`, including public `TOOLS`, `execute_tool()`, and `process_chat()`. Confirmed production uses provider-native `tool_calls`, while the new Kaggle experiment should emit plain JSON and adapt it into `execute_tool()`. fileciteturn21file0turn23file0turn24file0turn25file0
 
-### 2026-09-10 — HavenTo repository verification
-Inspected `backend/services/agentService.py`, including both `TOOLS` and `process_chat()`/`execute_tool()`. Confirmed the production path consumes provider-native `tool_calls`, parses function arguments as JSON, and invokes `execute_tool()`. fileciteturn18file0 fileciteturn19file0
+### 2026-09-10 — Grammar clarification completed
+Confirmed that the high-level grammar architecture is clear. The implementation will use one plain JSON tool-call object, one tool per generation, tokenizer-aware constrained decoding, public-schema validation in CFG, and backend/business validation after parsing.
 
-### 2026-09-10 — Architecture correction
-Confirmed that the new CFG experiment should generate a **plain JSON tool-call object**, e.g.:
-
-```json
-{"name":"searchHomes","arguments":{"location":"Bijnor"}}
-```
-
-The `[TOOL_CALLS]` marker is removed from the grammar. The backend adapter will parse the JSON object and route it to the existing `execute_tool(tool_name, args, user_id)` path.
+### 2026-09-10 — Handoff updated
+This handoff now records the final grammar decisions and the additional backend/schema discrepancies found during the second backend verification.
 
 ## Clarification workflow
-If an implementation decision genuinely cannot be determined from the code/current requirements, ask the user **one question at a time in MCP format**, wait for the answer, then continue. Do not ask multiple clarification questions simultaneously.
+If a genuinely unresolved implementation decision remains, ask the user **one question at a time in MCP format**, wait for the answer, then continue. Do not ask multiple clarification questions simultaneously.
