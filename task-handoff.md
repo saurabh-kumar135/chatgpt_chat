@@ -216,7 +216,6 @@ If we later decide that these conditional requirements should be part of the for
 These remain backend/application responsibilities.
 
 ## Backend validation recommendation
-
 The new Kaggle adapter should add a validation layer before calling `execute_tool()`:
 
 ```text
@@ -249,7 +248,6 @@ These are NOT reasons to complicate the CFG:
 These should be handled separately from CFG work.
 
 ## Tool-selection vs grammar
-
 The HavenTo system prompt determines when a tool should be selected. CFG determines whether the selected output has legal structure.
 
 Examples:
@@ -263,27 +261,80 @@ Examples:
 The CFG does not need to understand the user's natural-language intent or MongoDB state.
 
 ## Current notebook problem
-
 The existing `ToolCallLogitMaskingProcessor` is only a bracket/depth state machine. It previously forced `[TOOL_CALLS]`, decoded generated text each step, tracked nesting, and eventually allowed EOS. It is not a complete CFG for the seven-tool JSON contract.
 
 Do not patch the old `[TOOL_CALLS]` logic. Replace it with tokenizer-aware constrained decoding for the plain JSON object.
 
-## Exact next implementation
+## Implementation files
 
-1. Keep Kaggle + Transformers + `model.generate()`.
-2. Remove all `[TOOL_CALLS]` assumptions.
-3. Define the grammar from the verified public `TOOLS` contract above.
-4. Start generation at `{`.
-5. Generate exactly one object with `name` and `arguments`.
-6. Use tokenizer-aware continuation states for the seven tool names.
-7. Switch to the selected tool's argument grammar after the tool name is complete.
-8. Enforce public keys, JSON types, enums, and public required fields.
-9. Prevent all trailing text after `}`.
-10. Parse the generated JSON.
-11. Validate it again in the backend adapter.
-12. Call `execute_tool(tool_name, args, user_id)`.
-13. Return tool results to an unrestricted response-generation step.
-14. Test all seven tools and all invalid cases.
+### `mistral_cfg_tool_calling_kaggle_fixed.py`
+Created as the corrected implementation. It contains:
+- the verified seven-tool public schemas;
+- regex-based grammar construction for exact JSON objects and tool-specific argument combinations;
+- complete/prefix grammar validation;
+- schema validation after generation;
+- the corrected `HavenToCFGLogitsProcessor`;
+- prompt construction;
+- constrained generation;
+- backend adapter payload conversion;
+- valid/invalid regression tests.
+
+### `mistral-cfg-tool-calling-kaggle-final.ipynb`
+Updated to use the fixed implementation. The notebook installs the required packages and loads the fixed implementation from `mistral_cfg_tool_calling_kaggle_fixed.py`.
+
+## Critical bug fixed — tokenizer-context candidate decoding
+
+The previous constrained decoder tested candidate tokens by decoding the candidate token independently and concatenating it with the existing prefix. This is incorrect for Mistral/SentencePiece tokenization because a token's decoded text can depend on its surrounding token context.
+
+The bad pattern was conceptually:
+
+```python
+prefix_text + tokenizer.decode([candidate_token_id])
+```
+
+This could turn a valid continuation such as the JSON opening into a false prefix like:
+
+```text
+'{ "'
+```
+
+and cause a CFG dead-end immediately after `{`, even though the actual token sequence was valid.
+
+The corrected implementation reconstructs the complete generated token sequence and decodes it as one sequence before checking the grammar:
+
+```python
+self.tokenizer.decode(
+    generated_ids + [candidate_token_id],
+    skip_special_tokens=False,
+    clean_up_tokenization_spaces=False,
+)
+```
+
+This preserves the tokenizer's actual context and removes the false-space/dead-end failure.
+
+The processor also:
+- extracts the generated suffix from the prompt using token IDs;
+- allows EOS only when the current decoded prefix is a complete valid tool-call object;
+- masks EOS otherwise;
+- raises an explicit CFG dead-end error if no valid continuation remains.
+
+## Validation status
+
+The grammar and validation logic were regression-tested locally against representative valid and invalid cases. The seven-tool public contract and rejection cases are covered by the implementation tests.
+
+Actual Mistral-7B inference was not run in the current development environment because the required Kaggle/GPU model runtime was not available here. Therefore Kaggle execution remains the next runtime-level verification step.
+
+## Exact next implementation / verification
+
+1. Run `mistral-cfg-tool-calling-kaggle-final.ipynb` on Kaggle with the target Mistral-7B-Instruct-v0.3 model.
+2. Verify generation begins at `{` and does not dead-end at the first JSON characters.
+3. Run all seven valid-tool test groups.
+4. Run all invalid CFG cases.
+5. Confirm generated output parses as exactly one JSON object.
+6. Confirm `to_backend_payload()` produces `(tool_name, args)` suitable for the backend adapter.
+7. Connect the adapter to `execute_tool(tool_name, args, user_id)`.
+8. Keep final natural-language response generation unrestricted.
+9. If Kaggle reveals another runtime/tokenizer issue, record the exact error here before changing the grammar design.
 
 ## Testing priorities
 
@@ -321,8 +372,17 @@ Re-inspected `backend/services/agentService.py`, including public `TOOLS`, `exec
 ### 2026-09-10 — Grammar clarification completed
 Confirmed that the high-level grammar architecture is clear. The implementation will use one plain JSON tool-call object, one tool per generation, tokenizer-aware constrained decoding, public-schema validation in CFG, and backend/business validation after parsing.
 
+### 2026-09-10 — Tokenizer-context bug diagnosed
+The initial fixed decoder still produced CFG dead-ends because candidate tokens were being decoded independently before prefix validation. Mistral/SentencePiece token decoding is context-sensitive, so independent candidate decoding can introduce a false space and reject a valid JSON continuation.
+
+### 2026-09-10 — Tokenizer-context fix implemented
+Replaced independent candidate decoding with full-sequence decoding of `generated_ids + [candidate_token_id]`, with `clean_up_tokenization_spaces=False`. Added explicit EOS gating and dead-end reporting. Regression tests for grammar acceptance/rejection passed locally.
+
+### 2026-09-10 — Fixed implementation committed
+Created `mistral_cfg_tool_calling_kaggle_fixed.py` and updated `mistral-cfg-tool-calling-kaggle-final.ipynb` to execute the corrected implementation. The notebook now has no `[TOOL_CALLS]` protocol and delegates constrained decoding to the fixed processor.
+
 ### 2026-09-10 — Handoff updated
-This handoff now records the final grammar decisions and the additional backend/schema discrepancies found during the second backend verification.
+Recorded the tokenizer-context decoding failure, its root cause, the corrected implementation, validation status, and the next required Kaggle GPU verification steps.
 
 ## Clarification workflow
 If a genuinely unresolved implementation decision remains, ask the user **one question at a time in MCP format**, wait for the answer, then continue. Do not ask multiple clarification questions simultaneously.
