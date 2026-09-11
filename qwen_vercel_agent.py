@@ -25,29 +25,62 @@ import httpx
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 DEFAULT_MODEL = "qwen/qwen3.8-27b"
 
+# Locate script directory and vercel_mcp_server.py
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def _load_env_fallback(key: str, default: str = "") -> str:
-    """Reads from environment or checks common .env file locations."""
+    """Reads from environment, .env files, or known local test scripts."""
     val = os.getenv(key)
-    if val:
-        return val
-    # Search common .env files in current, parent, or express directories
-    for path in [".env", "../.env", "../../.env", "/home/saurabh-kumar123/Desktop/Desktop/express/.env"]:
+    if val and val.strip():
+        return val.strip()
+
+    # Search common .env locations
+    candidates = [
+        os.path.join(os.getcwd(), ".env"),
+        os.path.join(SCRIPT_DIR, ".env"),
+        os.path.join(os.path.dirname(SCRIPT_DIR), ".env"),
+        "/home/saurabh-kumar123/Desktop/Desktop/express/.env",
+        "/home/saurabh-kumar123/Desktop/Desktop/express/chatgpt_chat/.env",
+    ]
+    for path in candidates:
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
                         if line.startswith(f"{key}="):
-                            return line.split("=", 1)[1].strip("\"' ")
+                            extracted = line.split("=", 1)[1].strip("\"' ")
+                            if extracted:
+                                return extracted
             except Exception:
                 pass
+
+    # Secondary fallback for GROQ_API_KEY from test_api.sh
+    if key == "GROQ_API_KEY":
+        test_api_paths = [
+            "/home/saurabh-kumar123/Desktop/Desktop/express/ai_agent/test_api.sh",
+            os.path.join(os.getcwd(), "ai_agent", "test_api.sh"),
+        ]
+        for t_path in test_api_paths:
+            if os.path.exists(t_path):
+                try:
+                    with open(t_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        import re
+                        m = re.search(r"Bearer\s+(gsk_[A-Za-z0-9]+)", content)
+                        if m:
+                            return m.group(1)
+                except Exception:
+                    pass
+
     return default
 
 DEFAULT_GROQ_KEY = _load_env_fallback("GROQ_API_KEY", "")
 DEFAULT_VERCEL_TOKEN = _load_env_fallback("VERCEL_TOKEN", "")
 
 # Locate vercel_mcp_server.py relative to this script
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MCP_SERVER_PATH = os.path.join(SCRIPT_DIR, "vercel_mcp_server.py")
 if not os.path.exists(MCP_SERVER_PATH):
     # Fallback to parent directory if running inside a subfolder
@@ -215,8 +248,17 @@ class QwenVercelAgent:
 
         messages.append({"role": "user", "content": user_query})
 
+        if not self.groq_key or not self.groq_key.strip():
+            return (
+                "❌ Configuration Error: GROQ_API_KEY is missing!\n\n"
+                "To resolve this, choose one of the following:\n"
+                "  1. Create a `.env` file with: GROQ_API_KEY=gsk_...\n"
+                "  2. Export it in your shell: export GROQ_API_KEY=gsk_...\n"
+                "  3. Run with flag: python3 qwen_vercel_agent.py --groq-key gsk_...\n"
+            )
+
         headers = {
-            "Authorization": f"Bearer {self.groq_key}",
+            "Authorization": f"Bearer {self.groq_key.strip()}",
             "Content-Type": "application/json"
         }
 
