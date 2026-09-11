@@ -301,6 +301,9 @@ class QwenVercelAgent:
 
                     print(f"\n⚙️  [Qwen 3.8 27B] ➔ Calling MCP Tool: {tool_name}({json.dumps(args)})")
                     tool_result_str = await self.mcp.call_tool(tool_name, args)
+                    # Defensive guardrail: prevent any single tool output from exceeding Groq's 7,000 token limit
+                    if len(tool_result_str) > 3500:
+                        tool_result_str = tool_result_str[:3500] + "\n... [truncated to fit token budget]"
                     print(f"📥 [Vercel MCP Server] ➔ Received {len(tool_result_str)} bytes of data")
 
                     messages.append({
