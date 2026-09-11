@@ -274,7 +274,23 @@ class QwenVercelAgent:
                     "tool_choice": "auto"
                 }
 
-                response = await http_client.post(GROQ_API_URL, headers=headers, json=payload)
+                for attempt in range(3):
+                    response = await http_client.post(GROQ_API_URL, headers=headers, json=payload)
+                    if response.status_code == 429:
+                        wait_sec = 4.0
+                        try:
+                            err_msg = response.json().get("error", {}).get("message", "")
+                            import re
+                            m = re.search(r"try again in ([\d\.]+)s", err_msg)
+                            if m:
+                                wait_sec = float(m.group(1)) + 0.5
+                        except Exception:
+                            pass
+                        print(f"⏳ [Groq Rate Limit] Waiting {wait_sec:.1f}s before automatic retry...")
+                        await asyncio.sleep(wait_sec)
+                        continue
+                    break
+
                 if response.status_code >= 400:
                     return f"❌ Groq API Error ({response.status_code}): {response.text}"
 
