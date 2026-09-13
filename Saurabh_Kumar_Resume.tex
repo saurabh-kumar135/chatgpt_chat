@@ -1,0 +1,191 @@
+%-------------------------
+% Resume in LaTeX
+% Author: Saurabh Kumar
+%-------------------------
+
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\input{glyphtounicode}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Adjust margins
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Sections formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+\pdfgentounicode=1
+
+%-------------------------
+% Custom commands
+
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
+
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+%-------------------------------------------
+%%%%%%  RESUME STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{document}
+
+%----------HEADING----------
+\begin{center}
+    {\Huge \scshape Saurabh Kumar} \\ \vspace{4pt}
+    \small
+    +91-7668476462 $|$
+    \href{mailto:saurabhrajput.25072005@gmail.com}{saurabhrajput.25072005@gmail.com} $|$
+    \href{https://linkedin.com/in/saurabh-rajput}{linkedin.com/in/saurabh-rajput} $|$
+    \href{https://github.com/saurabh-kumar135}{github.com/saurabh-kumar135}
+\end{center}
+
+%-----------SUMMARY-----------
+\section{Summary}
+\small{
+Computer Science student with expertise in full-stack web development and artificial intelligence. Proficient in building production-ready applications using MERN stack, TensorFlow, and cloud technologies. Active open-source contributor with demonstrated success in developing scalable solutions achieving 95\% model accuracy and handling 10,000+ daily API requests.
+}
+
+%-----------EDUCATION-----------
+\section{Education}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {Dr. APJ Abdul Kalam Technical University}{Lucknow, India}
+      {Bachelor of Technology in Computer Science and Engineering; CGPA: 7.39/10.0}{Aug. 2023 -- May 2027}
+    \resumeSubheading
+      {Uttar Pradesh Board (UPMSP)}{Uttar Pradesh, India}
+      {Secondary School Certificate (Class X); Percentage: 87\%}{May 2020}
+  \resumeSubHeadingListEnd
+
+%-----------TECHNICAL SKILLS-----------
+\section{Technical Skills}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{Programming Languages:}{ JavaScript, Python, C++, HTML5, CSS3, SQL} \\
+     \textbf{Frontend Technologies:}{ React.js, Vite, Tailwind CSS, Responsive Design, Single Page Applications (SPA)} \\
+     \textbf{Backend Technologies:}{ Node.js, Express.js, RESTful APIs, JWT Authentication, FastApi} \\
+     \textbf{Databases:}{ MongoDB, MySQL, MongoDB Atlas} \\
+     \textbf{AI/ML Integration:}{ LangChain, LangGraph, Google Gemini API, TensorFlow, Keras, Playwright, RAG Pipelines, Vector Databases, Tool-calling LLMs} \\
+     \textbf{DevOps and Ai Tools:}{ Git, GitHub, Docker, Vercel, Render, Jupyter Notebook, npm, Antigravity,Cursor } \\
+     \textbf{Core Competencies:}{ Data Structures, Algorithms, System Design}
+    }}
+ \end{itemize}
+
+%-----------PROJECTS-----------
+\section{Projects}
+  \resumeSubHeadingListStart
+
+    \resumeProjectHeading
+      {\textbf{StudyMate -- AI-Powered Study Platform} $|$ \emph{React, Node.js, MongoDB, Gemini AI}}{Jan. 2025}
+      \resumeItemListStart
+        \resumeItem{Engineered full-stack educational platform serving 20+ active users with AI-powered study assistance using MERN stack and Google Gemini API.}
+        \resumeItem{Implemented intelligent chatbot for personalized learning with automated document summarization supporting PDF and DOCX formats.}
+        \resumeItem{Developed comprehensive analytics dashboard featuring streak tracking and progress visualization using Recharts library.}
+        \resumeItem{Integrated secure OTP-based email verification system using Resend API with bcrypt password encryption and session management.}
+        \resumeItem{Established DDoS protection with rate limiting (3--100 requests per endpoint) and security headers using Helmet.js middleware.}
+        \resumeItem{Deployed scalable architecture on Vercel (frontend) and Render (backend) with MongoDB Atlas for reliable data persistence.}
+        \resumeItem{Links: \href{https://github.com/saurabh-kumar135/StudyMate}{\underline{GitHub}} $|$ \href{https://study-mate1.vercel.app/}{\underline{Live Demo}}}
+      \resumeItemListEnd
+
+    \resumeProjectHeading
+      {\textbf{Brain Tumor Detection System} $|$ \emph{Python, TensorFlow, Keras, Express.js, React, OpenCV}}{Dec. 2025}
+      \resumeItemListStart
+        \resumeItem{Engineered full-stack medical image classification system achieving 95.59\% accuracy in detecting brain tumors from MRI scans using custom CNN with Transfer Learning (VGG16).}
+        \resumeItem{Integrated Express.js backend API with Python deep learning models via child processes to handle image uploads and return instant predictions.}
+        \resumeItem{Designed responsive hospital portal dashboard in React featuring secure license-based registration, file uploads via Multer, and confidence score visualization.}
+        \resumeItem{Preprocessed and normalized a dataset of 3,000+ brain MRI scan images using OpenCV and NumPy for model training, validation, and testing.}
+        \resumeItem{Deployed production microservices architecture utilizing Vercel for the frontend and Render for the API backend.}
+        \resumeItem{Links: \href{https://github.com/saurabh-kumar135/brain-tumor-detection}{\underline{GitHub}}}
+      \resumeItemListEnd
+
+    \resumeProjectHeading
+      {\textbf{HavenTo -- Accommodation Booking Platform} $|$ \emph{React, Node.js, MongoDB, Express}}{Oct. 2025}
+      \resumeItemListStart
+        \resumeItem{Built full-stack booking platform handling 500+ registered users with property listings and comprehensive reservation management.}
+        \resumeItem{Developed RESTful APIs processing 10,000+ daily requests with robust error handling, input validation, and response optimization.}
+        \resumeItem{Implemented user authentication, favorites system, and booking functionality with secure JWT-based session management.}
+        \resumeItem{Integrated Cloudinary API for optimized image storage, upload, and delivery with automatic compression and caching.}
+        \resumeItem{Designed responsive user interface with React Router enabling seamless navigation and enhanced user experience across devices.}
+        \resumeItem{Deployed production application on Vercel (frontend) and Render (backend) with MongoDB Atlas for scalable data storage.}
+        \resumeItem{Links: \href{https://github.com/saurabh-kumar135/HavenTo-Accommodation-Booking-Platform-}{\underline{GitHub}} $|$ \href{https://havento.vercel.app}{\underline{Live Demo}}}
+      \resumeItemListEnd
+
+  \resumeSubHeadingListEnd
+
+%-----------ACHIEVEMENTS-----------
+\section{Achievements}
+  \resumeSubHeadingListStart
+    \resumeSubItem{Contributed to 5+ open-source projects including React.js ecosystem and TensorFlow.js with merged pull requests.}
+    \resumeSubItem{Developed and deployed 3 production-ready full-stack applications on cloud platforms (Vercel, Render, AWS).}
+    \resumeSubItem{Achieved 95\%+ accuracy in medical AI model for brain tumor detection from MRI scans using deep learning techniques.}
+    \resumeSubItem{Built scalable RESTful APIs handling 10,000+ daily requests with optimized performance and comprehensive error handling.}
+    \resumeSubItem{Solved 100+ algorithmic problems on LeetCode and GeeksforGeeks demonstrating strong problem-solving abilities.}
+    \resumeSubItem{Participated in college hackathons and technical competitions, securing recognition for innovative technology solutions.}
+  \resumeSubHeadingListEnd
+
+%-----------CERTIFICATIONS-----------
+\section{Certifications}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {Front End Web Development}{Nov. 2025}
+      {Online Course}{}
+    \vspace{4pt}
+    \resumeSubheading
+      {Large Language Model}{Feb. 2026}
+      {Online Course}{}
+  \resumeSubHeadingListEnd
+
+%-------------------------------------------
+\end{document}
